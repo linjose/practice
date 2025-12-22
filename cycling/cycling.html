@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>Cycling Data Overlay Player</title>
+    <style>
+        body, html {
+            margin: 0; padding: 0; width: 100%; height: 100%;
+            background-color: #000; overflow: hidden; font-family: Arial, sans-serif;
+        }
+        #video-container { position: relative; width: 100vw; height: 100vh; }
+        #player { width: 100%; height: 100%; }
+        #overlay {
+            position: absolute; top: 10%; left: 0; width: 100%; height: 80px;
+            background-color: rgba(0, 0, 0, 0.6); display: flex;
+            justify-content: space-around; align-items: center;
+            color: white; z-index: 10; pointer-events: none;
+        }
+        .player-stats { text-align: center; flex: 1; border-right: 1px solid rgba(255,255,255,0.3); }
+        .player-stats:last-child { border-right: none; }
+        .label { font-size: 14px; color: #aaa; }
+        .value { font-size: 20px; font-weight: bold; margin-top: 5px; }
+        .p-name { color: #00ffcc; font-size: 16px; margin-bottom: 5px; }
+    </style>
+</head>
+<body>
+
+<div id="video-container">
+    <div id="overlay"></div>
+    <div id="player"></div>
+</div>
+
+<script>
+    const CONFIG = {
+        apiBaseUrl: "http://127.0.0.1/cycling", 
+        playerCount: 3,
+        videoList: [
+            'IPxNUTvawVE', 'PH-kqdzTgqE', 'mJM_7U2h_Fk', 'QzW3tZyGqRk'
+            // ... 這裡可補足到 50 組
+        ]
+    };
+
+    let player;
+
+    // 正確的 YouTube API 載入方式
+    var tag = document.createElement('script');
+    tag.src = "https://www.youtube.com/iframe_api";
+    var firstScriptTag = document.getElementsByTagName('script')[0];
+    if (firstScriptTag) {
+        firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
+    } else {
+        document.head.appendChild(tag);
+    }
+
+    function onYouTubeIframeAPIReady() {
+        loadVideo();
+    }
+
+    function getUrlParameter(name) {
+        const urlParams = new URLSearchParams(window.location.search);
+        return urlParams.get(name);
+    }
+
+    function loadVideo() {
+        let videoId = "";
+        const urlVideoId = getUrlParameter('v');
+
+        if (urlVideoId) {
+            videoId = urlVideoId;
+            // 載入後清除網址上的 v 參數，下次觸發 loadVideo 時就會走隨機邏輯
+            window.history.replaceState({}, document.title, window.location.pathname);
+        } else {
+            const randomIndex = Math.floor(Math.random() * CONFIG.videoList.length);
+            videoId = CONFIG.videoList[randomIndex];
+        }
+        
+        if (!player) {
+            player = new YT.Player('player', {
+                height: '100%',
+                width: '100%',
+                videoId: videoId,
+                playerVars: { 'autoplay': 0, 'controls': 1, 'rel': 0 },
+                events: {
+                    'onReady': onPlayerReady,
+                    'onStateChange': onPlayerStateChange
+                }
+            });
+        } else {
+            player.loadVideoById(videoId);
+        }
+    }
+
+    function onPlayerReady(event) {
+        initOverlay();
+        setInterval(fetchData, 1000);
+    }
+
+    function onPlayerStateChange(event) {
+        if (event.data === YT.PlayerState.ENDED) {
+            loadVideo(); // 播完後自動跑下一支 (此時網址參數已被 replaceState 清除，會走隨機)
+        }
+    }
+
+    function initOverlay() {
+        const overlay = document.getElementById('overlay');
+        overlay.innerHTML = '';
+        for (let i = 1; i <= CONFIG.playerCount; i++) {
+            const div = document.createElement('div');
+            div.className = 'player-stats';
+            div.innerHTML = `
+                <div class="p-name">Player ${i}</div>
+                <div class="value">
+                    <span id="p${i}-s">0</span> <span class="label">km/h</span> | 
+                    <span id="p${i}-c">0</span> <span class="label">RPM</span> | 
+                    <span id="p${i}-d">0</span> <span class="label">KM</span>
+                </div>
+            `;
+            overlay.appendChild(div);
+        }
+    }
+
+    /*
+    async function fetchData() {
+        let anyPlayerMoving = false;
+        for (let i = 1; i <= CONFIG.playerCount; i++) {
+            try {
+                // 注意：若您的 API 結尾沒有 .json，請把下方 .json 刪除
+                const response = await fetch(`${CONFIG.apiBaseUrl}/p${i}.json`);
+                const data = await response.json(); 
+
+                document.getElementById(`p${i}-s`).innerText = data.s;
+                document.getElementById(`p${i}-c`).innerText = data.c;
+                document.getElementById(`p${i}-d`).innerText = data.d;
+
+                if (parseFloat(data.s) > 0) anyPlayerMoving = true;
+            } catch (error) {
+                // 靜默處理 API 錯誤，避免 console 過於混亂
+            }
+        }
+        handlePlayback(anyPlayerMoving);
+    }*/
+
+/*    
+    async function fetchData() {
+        let anyPlayerMoving = false;
+
+        // 使用 Promise.all 同時發送所有請求，效率更高且互不干擾
+        const promises = [];
+        for (let i = 1; i <= CONFIG.playerCount; i++) {
+            promises.push(
+                fetch(`${CONFIG.apiBaseUrl}/p${i}.json`)
+                    .then(res => res.json())
+                    .then(data => {
+                        // 更新該玩家的 UI
+                        const sElement = document.getElementById(`p${i}-s`);
+                        const cElement = document.getElementById(`p${i}-c`);
+                        const dElement = document.getElementById(`p${i}-d`);
+                        
+                        if (sElement) sElement.innerText = data.s;
+                        if (cElement) cElement.innerText = data.c;
+                        if (dElement) dElement.innerText = data.d;
+
+                        // 判斷是否有人在踩踏
+                        if (parseFloat(data.s) > 0) {
+                            anyPlayerMoving = true;
+                        }
+                    })
+                    .catch(err => {
+                        console.warn(`Player ${i} API 讀取失敗:`, err.message);
+                    })
+            );
+        }
+
+        // 等待所有 API 請求完成（不論成功或失敗）
+        await Promise.allSettled(promises);
+
+        // 根據結果控制播放
+        handlePlayback(anyPlayerMoving);
+    }
+*/    
+
+    async function fetchData() {
+        let anyPlayerMoving = false;
+        const promises = [];
+
+        for (let i = 1; i <= CONFIG.playerCount; i++) {
+            // 在網址後加上 ?t=時間戳記，解決瀏覽器快取問題
+            const apiUrl = `${CONFIG.apiBaseUrl}/p${i}.json?nocache=${Date.now()}`;
+            
+            promises.push(
+                fetch(apiUrl)
+                    .then(res => {
+                        if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+                        return res.json();
+                    })
+                    .then(data => {
+                        // 更新 UI
+                        const s = document.getElementById(`p${i}-s`);
+                        const c = document.getElementById(`p${i}-c`);
+                        const d = document.getElementById(`p${i}-d`);
+                        
+                        if (s) s.innerText = data.s;
+                        if (c) c.innerText = data.c;
+                        if (d) d.innerText = data.d;
+
+                        // 判斷是否有人在踩踏 (轉成浮點數比較更安全)
+                        if (parseFloat(data.s) > 0) {
+                            anyPlayerMoving = true;
+                        }
+                    })
+                    .catch(err => {
+                        console.warn(`Player ${i} 更新失敗:`, err.message);
+                    })
+            );
+        }
+
+        // 等待所有請求結束
+        await Promise.allSettled(promises);
+
+        // 控制播放與暫停
+        handlePlayback(anyPlayerMoving);
+    }
+
+    function handlePlayback(anyPlayerMoving) {
+        if (!player || typeof player.getPlayerState !== 'function') return;
+        const state = player.getPlayerState();
+        if (anyPlayerMoving && state !== YT.PlayerState.PLAYING) {
+            player.playVideo();
+        } else if (!anyPlayerMoving && state === YT.PlayerState.PLAYING) {
+            player.pauseVideo();
+        }
+    }
+</script>
+</body>
+</html>
