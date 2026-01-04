@@ -169,3 +169,145 @@ if __name__ == "__main__":
 
 ## 7. 同時連接多顆感測器
 * 若有多個 S3+（一個測速、一個測踏頻），同時連接多個設備的做法。
+
+假設同時連接 8 個 Magene S3+ 感應器，最核心的挑戰在於 **「併發處理 (Concurrency)」** 以及 **「藍牙硬體限制」**。
+
+在 Ubuntu 上，我們依然使用 `bleak` 配合 `asyncio`。為了管理 8 個設備，建議使用 **物件導向 (OOP)** 的方式，為每個感應器建立獨立的實例來維護各自的狀態（如上一次的圈數與時間）。
+
+### 藍牙硬體重要提醒
+
+一般的筆電內建藍牙晶片通常只能穩定連接 **5 到 7 個** 設備。要同時連接 8 個感應器，建議：
+
+1. 使用高品質的 **藍牙 5.0 (或以上) USB 接收器**。
+2. 如果連線不穩定，可能需要插兩個藍牙接收器（Ubuntu 的 BlueZ 支援多網卡管理）。
+
+---
+
+### 多設備連接程式範例
+
+```python
+import asyncio
+import struct
+from bleak import BleakClient, BleakScanner
+
+# 標準 CSC UUID
+CSC_MEASUREMENT_UUID = "00002a5b-0000-1000-8000-00805f9b34fb"
+
+class MageneSensor:
+    def __init__(self, name, address, sensor_type):
+        self.name = name          # 例如: Bike1_Speed
+        self.address = address
+        self.type = sensor_type   # 'speed' 或 'cadence'
+        self.last_rev = -1
+        self.last_time = -1
+        self.client = None
+
+    def notification_handler(self, sender, data):
+        flags = data[0]
+        offset = 1
+        
+        # 解析邏輯
+        wheel_present = flags & 0x01
+        crank_present = flags & 0x02
+
+        current_rev = -1
+        current_time = -1
+
+        if self.type == 'speed' and wheel_present:
+            current_rev = int.from_bytes(data[offset:offset+4], byteorder='little')
+            current_time = int.from_bytes(data[offset+4:offset+6], byteorder='little')
+        elif self.type == 'cadence' and crank_present:
+            current_rev = int.from_bytes(data[offset:offset+2], byteorder='little')
+            current_time = int.from_bytes(data[offset+2:offset+4], byteorder='little')
+
+        if current_rev != -1:
+            self.calculate_metrics(current_rev, current_time)
+
+    def calculate_metrics(self, rev, time):
+        if self.last_rev != -1 and time != self.last_time:
+            rev_delta = (rev - self.last_rev) & (0xFFFFFFFF if self.type == 'speed' else 0xFFFF)
+            time_delta = (time - self.last_time) & 0xFFFF
+            
+            # 物理公式計算 RPM
+            # $RPM = \frac{\Delta Revolutions}{\Delta Time / 1024} \times 60$
+            rpm = (rev_delta / (time_delta / 1024.0)) * 60
+            
+            unit = "RPM (踏頻)" if self.type == 'cadence' else "RPM (輪轉速)"
+            print(f"[{self.name}] {unit}: {rpm:.2f}")
+
+        self.last_rev = rev
+        self.last_time = time
+
+    async def connect_and_run(self):
+        print(f"嘗試連接 {self.name} ({self.address})...")
+        async with BleakClient(self.address) as client:
+            self.client = client
+            print(f"成功連接 {self.name}")
+            await client.start_notify(CSC_MEASUREMENT_UUID, self.notification_handler)
+            
+            # 保持連線，直到被外部取消
+            while True:
+                await asyncio.sleep(1)
+
+async def main():
+    # 1. 定義你的 8 個設備清單 (請填入實際的 MAC Address)
+    device_configs = [
+        {"name": "Bike1_SPD", "addr": "D1:00:00:00:00:01", "type": "speed"},
+        {"name": "Bike1_CAD", "addr": "D1:00:00:00:00:02", "type": "cadence"},
+        {"name": "Bike2_SPD", "addr": "D1:00:00:00:00:03", "type": "speed"},
+        {"name": "Bike2_CAD", "addr": "D1:00:00:00:00:04", "type": "cadence"},
+        {"name": "Bike3_SPD", "addr": "D1:00:00:00:00:05", "type": "speed"},
+        {"name": "Bike3_CAD", "addr": "D1:00:00:00:00:06", "type": "cadence"},
+        {"name": "Bike4_SPD", "addr": "D1:00:00:00:00:07", "type": "speed"},
+        {"name": "Bike4_CAD", "addr": "D1:00:00:00:00:08", "type": "cadence"},
+    ]
+
+    # 2. 建立實例
+    sensors = [MageneSensor(d["name"], d["addr"], d["type"]) for d in device_configs]
+
+    # 3. 使用 asyncio.gather 同時啟動所有連線任務
+    tasks = [sensor.connect_and_run() for sensor in sensors]
+    
+    try:
+        await asyncio.gather(*tasks)
+    except Exception as e:
+        print(f"發生錯誤: {e}")
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("程式已手動停止")
+
+```
+
+---
+
+### 解析與優化建議
+
+#### 1. 速度模式的 RPM 轉換
+
+在程式碼中，速度模式算出來的是「輪圈每分鐘轉速 (Wheel RPM)」。若要換算成 **公里/小時 (km/h)**，你需要知道輪胎的周長（例如 700c 輪胎約 2.1 公尺）：
+
+
+#### 2. 容錯機制 (Reconnection)
+
+在健身房環境中，人體和設備多，藍牙容易斷線。建議在 `connect_and_run` 中加入一個 `while True` 迴圈與 `try-except`，當連線斷開時自動重試：
+
+```python
+async def connect_and_run(self):
+    while True:
+        try:
+            async with BleakClient(self.address) as client:
+                # ... 訂閱與運行邏輯 ...
+        except Exception:
+            print(f"{self.name} 斷線，3秒後重試...")
+            await asyncio.sleep(3)
+
+```
+
+#### 3. 資料儲存
+
+由於有 8 個設備，終端機噴出的文字會非常快。建議將資料導向 **CSV 檔案** 或 **MQTT Broker**。
+
+* **MQTT:** 非常適合多設備監控，你可以將數據發送到一個 Dashboard（如 Node-RED）來即時觀察 4 台車的狀況。
