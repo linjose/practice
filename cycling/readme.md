@@ -311,3 +311,143 @@ async def connect_and_run(self):
 由於有 8 個設備，終端機噴出的文字會非常快。建議將資料導向 **CSV 檔案** 或 **MQTT Broker**。
 
 * **MQTT:** 非常適合多設備監控，你可以將數據發送到一個 Dashboard（如 Node-RED）來即時觀察 4 台車的狀況。
+
+
+---
+
+# Magene S3 + **Node-RED** + **MQTT (Message Queuing Telemetry Transport)** 
+
+Python 腳本負責與藍牙硬體溝通（生產者），MQTT Broker 負責轉發訊息（郵局），而 Node-RED 則負責接收並顯示數據（消費者）。
+
+---
+
+## 1. 架構設計
+
+* **Ubuntu 主機**：運行所有服務。
+* **Mosquitto**：作為 MQTT Broker，負責在中途傳遞數據。
+* **Python 腳本**：連接 8 個 S3+，將解析出的 RPM 轉成 JSON 格式發送到 MQTT Topic。
+* **Node-RED**：訂閱這些 Topic，並製作成圖表。
+
+---
+
+## 2. 安裝必要套件
+
+在 Ubuntu 上安裝 MQTT Broker 與 Python 函式庫：
+
+```bash
+# 安裝 Mosquitto Broker
+sudo apt update
+sudo apt install mosquitto mosquitto-clients
+
+# 安裝 Python MQTT 函式庫
+pip install paho-mqtt
+
+```
+
+---
+
+## 3. 修改 Python 程式碼 (發送到 MQTT)
+
+我們在原本的類別中加入 MQTT 發送功能。建議 Topic 命名規則為：`fitness/bike{ID}/{type}`。
+
+```python
+import asyncio
+import json
+import paho.mqtt.client as mqtt
+from bleak import BleakClient
+
+# MQTT 設定
+MQTT_BROKER = "localhost"
+MQTT_PORT = 1883
+
+class MageneSensor:
+    def __init__(self, bike_id, sensor_type, address, mqtt_client):
+        self.bike_id = bike_id      # 車號: 1, 2, 3, 4
+        self.type = sensor_type     # 'speed' 或 'cadence'
+        self.address = address
+        self.mqtt_client = mqtt_client
+        self.last_rev = -1
+        self.last_time = -1
+        # 定義 MQTT Topic
+        self.topic = f"fitness/bike{self.bike_id}/{self.type}"
+
+    def calculate_metrics(self, rev, time):
+        if self.last_rev != -1 and time != self.last_time:
+            rev_delta = (rev - self.last_rev) & (0xFFFFFFFF if self.type == 'speed' else 0xFFFF)
+            time_delta = (time - self.last_time) & 0xFFFF
+            rpm = (rev_delta / (time_delta / 1024.0)) * 60
+
+            # 封裝成 JSON 格式
+            payload = {
+                "bike_id": self.bike_id,
+                "type": self.type,
+                "value": round(rpm, 2),
+                "unit": "RPM"
+            }
+            # 發送到 MQTT
+            self.mqtt_client.publish(self.topic, json.dumps(payload))
+            print(f"發送至 {self.topic}: {payload}")
+
+        self.last_rev = rev
+        self.last_time = time
+
+    # ... (其餘連線與 notification_handler 邏輯同前一版本) ...
+
+async def main():
+    # 初始化 MQTT
+    mqtt_c = mqtt.Client()
+    mqtt_c.connect(MQTT_BROKER, MQTT_PORT, 60)
+    mqtt_c.loop_start()
+
+    device_configs = [
+        {"id": 1, "type": "speed", "addr": "D1:XX:XX:XX:XX:01"},
+        {"id": 1, "type": "cadence", "addr": "D1:XX:XX:XX:XX:02"},
+        # ... 依此類推列出 8 個 ...
+    ]
+
+    sensors = [MageneSensor(d["id"], d["type"], d["addr"], mqtt_c) for d in device_configs]
+    tasks = [sensor.connect_and_run() for sensor in sensors]
+    await asyncio.gather(*tasks)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
+```
+
+---
+
+## 4. Node-RED 配置步驟
+
+1. **安裝 Node-RED** (如果還沒安裝)：
+```bash
+sudo npm install -g --unsafe-perm node-red
+node-red  # 啟動後開啟瀏覽器 http://localhost:1880
+
+```
+
+
+2. **安裝 Dashboard 節點**：
+在 Node-RED 右上角選單 -> `Manage palette` -> 搜尋並安裝 `node-red-dashboard`。
+3. **拉取節點**：
+* **mqtt in**：設定 Server 為 `localhost`，Topic 設為 `fitness/+/+` (使用萬用字元一次接收所有車輛數據)。
+* **json**：將收到的字串轉回 JavaScript 物件。
+* **switch**：根據 `msg.payload.bike_id` 將數據分流到不同車輛的顯示區。
+* **ui chart / ui gauge**：將數據拉到儀表板上顯示。
+
+
+
+---
+
+## 5. 進階視覺化建議
+
+在 Node-RED Dashboard 中，你可以設計一個 2x2 的網格，每格代表一台車，內含兩個儀表（時速與踏頻）。
+
+* **即時監控**：使用 **Gauge (儀表板)** 顯示當前踏頻，如果低於 60 RPM 可以變色警告。
+* **歷史趨勢**：使用 **Chart (折線圖)** 記錄過去 10 分鐘的運動強度。
+* **數據存檔**：你可以多拉一條線到 `file` 節點或 `influxdb` 節點，將 4 台車的運動數據存下來做後續分析。
+
+### 這樣配置的好處
+
+* **低延遲**：MQTT 幾乎是同步傳輸，健身者踩踏的變化會立刻反應在螢幕上。
+* **穩定性**：如果 Node-RED 重啟，Python 腳本不需要停止；反之亦然。
+* **遠端觀看**：只要手機或平板跟 Ubuntu 主機在同一個區域網路，輸入 `http://<Ubuntu_IP>:1880/ui` 就能看到 4 台車的即時數據。
