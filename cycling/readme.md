@@ -684,3 +684,21 @@ return msg;
 
 部署 (Deploy) 後，開啟瀏覽器前往：
 `http://你的Ubuntu_IP:1880/ui`
+
+---
+
+## 4. 在 Node-RED 操作 InfluxDB
+
+使用 **InfluxDB**，在 Node-RED 中只需要：
+
+1. 安裝 `node-red-contrib-influxdb`。
+2. 將 Python 傳過來的 JSON 整理成如下格式：
+```javascript
+msg.payload = {
+    value: msg.payload.value,
+    type: msg.payload.type,
+    bike_id: msg.payload.bike_id
+};
+return msg;
+
+```
