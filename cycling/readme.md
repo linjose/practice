@@ -451,3 +451,236 @@ node-red  # 啟動後開啟瀏覽器 http://localhost:1880
 * **低延遲**：MQTT 幾乎是同步傳輸，健身者踩踏的變化會立刻反應在螢幕上。
 * **穩定性**：如果 Node-RED 重啟，Python 腳本不需要停止；反之亦然。
 * **遠端觀看**：只要手機或平板跟 Ubuntu 主機在同一個區域網路，輸入 `http://<Ubuntu_IP>:1880/ui` 就能看到 4 台車的即時數據。
+
+
+---
+
+## 配置 Node-RED Flow JSON 範例
+
+設定好接收 `fitness/+/+` 的 MQTT 訊息，並將數據分流到 4 台健身車的儀表板上。
+### 準備工作
+
+1. 確保已安裝 **Dashboard** 套件：`右上角選單` -> `Manage palette` -> `Install` -> 搜尋 `node-red-dashboard` 並安裝。
+2. 確保 MQTT Broker (Mosquitto) 正在運行。
+
+---
+
+### Node-RED Flow JSON
+
+請複製以下代碼，並在 Node-RED 中點選 **右上角選單 (≡) -> Import**，貼上後按下 **Import**。
+
+```json
+[
+    {
+        "id": "f1a1b1c1.node1",
+        "type": "mqtt in",
+        "z": "a1b2c3d4.flow1",
+        "name": "接收單車數據",
+        "topic": "fitness/+/+",
+        "qos": "2",
+        "datatype": "auto-detect",
+        "broker": "b1c2d3e4.mqtt_broker",
+        "nl": false,
+        "rap": true,
+        "rh": 0,
+        "inputs": 0,
+        "x": 130,
+        "y": 240,
+        "wires": [
+            [
+                "f2a2b2c2.json_node"
+            ]
+        ]
+    },
+    {
+        "id": "f2a2b2c2.json_node",
+        "type": "json",
+        "z": "a1b2c3d4.flow1",
+        "name": "",
+        "property": "payload",
+        "action": "",
+        "pretty": false,
+        "x": 310,
+        "y": 240,
+        "wires": [
+            [
+                "f3a3b3c3.switch_bike"
+            ]
+        ]
+    },
+    {
+        "id": "f3a3b3c3.switch_bike",
+        "type": "switch",
+        "z": "a1b2c3d4.flow1",
+        "name": "分流車號 (Bike ID)",
+        "property": "payload.bike_id",
+        "propertyType": "msg",
+        "rules": [
+            { "t": "eq", "v": "1", "vt": "num" },
+            { "t": "eq", "v": "2", "vt": "num" },
+            { "t": "eq", "v": "3", "vt": "num" },
+            { "t": "eq", "v": "4", "vt": "num" }
+        ],
+        "checkall": "true",
+        "repair": false,
+        "outputs": 4,
+        "x": 510,
+        "y": 240,
+        "wires": [
+            ["f4a4_b1_type"],
+            ["f4a4_b2_type"],
+            ["f4a4_b3_type"],
+            ["f4a4_b4_type"]
+        ]
+    },
+    {
+        "id": "f4a4_b1_type",
+        "type": "switch",
+        "z": "a1b2c3d4.flow1",
+        "name": "B1 類型",
+        "property": "payload.type",
+        "propertyType": "msg",
+        "rules": [
+            { "t": "eq", "v": "speed", "vt": "str" },
+            { "t": "eq", "v": "cadence", "vt": "str" }
+        ],
+        "checkall": "true",
+        "repair": false,
+        "outputs": 2,
+        "x": 700,
+        "y": 140,
+        "wires": [
+            ["b1_spd_gauge"],
+            ["b1_cad_gauge"]
+        ]
+    },
+    {
+        "id": "b1_spd_gauge",
+        "type": "ui_gauge",
+        "z": "a1b2c3d4.flow1",
+        "name": "Bike 1 輪速",
+        "group": "bike1_group",
+        "order": 1,
+        "width": 0,
+        "height": 0,
+        "gtype": "gage",
+        "title": "Bike 1 輪速 (RPM)",
+        "label": "RPM",
+        "format": "{{value}}",
+        "min": 0,
+        "max": "200",
+        "colors": ["#00b500", "#e6e600", "#ca3838"],
+        "seg1": "",
+        "seg2": "",
+        "x": 910,
+        "y": 120,
+        "wires": []
+    },
+    {
+        "id": "b1_cad_gauge",
+        "type": "ui_gauge",
+        "z": "a1b2c3d4.flow1",
+        "name": "Bike 1 踏頻",
+        "group": "bike1_group",
+        "order": 2,
+        "width": 0,
+        "height": 0,
+        "gtype": "gage",
+        "title": "Bike 1 踏頻 (RPM)",
+        "label": "RPM",
+        "format": "{{value}}",
+        "min": 0,
+        "max": "150",
+        "colors": ["#3366ff", "#00b500", "#ca3838"],
+        "seg1": "60",
+        "seg2": "100",
+        "x": 910,
+        "y": 160,
+        "wires": []
+    },
+    {
+        "id": "b1c2d3e4.mqtt_broker",
+        "type": "mqtt-broker",
+        "name": "Local Mosquitto",
+        "broker": "localhost",
+        "port": "1883",
+        "clientid": "",
+        "usetls": false,
+        "compatmode": false,
+        "keepalive": "60",
+        "cleansession": true,
+        "birthTopic": "",
+        "birthQos": "0",
+        "birthPayload": "",
+        "closeTopic": "",
+        "closeQos": "0",
+        "closePayload": "",
+        "willTopic": "",
+        "willQos": "0",
+        "willPayload": ""
+    },
+    {
+        "id": "bike1_group",
+        "type": "ui_group",
+        "name": "健身車 1 號",
+        "tab": "fitness_tab",
+        "order": 1,
+        "disp": true,
+        "width": "6",
+        "collapse": false
+    },
+    {
+        "id": "fitness_tab",
+        "type": "ui_tab",
+        "name": "即時訓練監控",
+        "icon": "dashboard",
+        "order": 1
+    }
+]
+
+```
+
+---
+
+## 解析此 Flow 的運作方式
+
+1. **MQTT In (`fitness/+/+`)**: 使用萬用字元 `+`。這意味著無論是 `bike1/speed` 還是 `bike4/cadence` 都會被同一個節點接收。
+2. **JSON Node**: 將 Python 發過來的字串解析成 JavaScript 物件，方便讀取 `msg.payload.value`。
+3. **Switch Bike (ID)**: 根據 Python JSON 裡的 `bike_id` 欄位進行分流。
+4. **Switch Type**: 將數據細分為「輪速」或「踏頻」。
+5. **UI Gauges**:
+* **輪速 (Speed)**: 顯示輪胎轉速。
+* **踏頻 (Cadence)**: 顯示使用者踩踏頻率，通常會設定區間（例如 60-100 RPM 為綠色健康區）。
+
+
+
+---
+
+## 如何擴充與美化
+
+### 1. 複製節點
+
+範例中我只完整寫了 Bike 1 的末端儀表。對於 Bike 2-4，你只需要：
+
+* 選取 `B1 類型` 和兩個 `Gauge`。
+* 按下 `Ctrl+C`, `Ctrl+V`。
+* 修改 `Switch` 的輸入來源為 `Switch Bike ID` 的第 2, 3, 4 個輸出點。
+* 修改 `Gauge` 節點所屬的 **Group**（為每台車建立一個新的 Group）。
+
+### 2. 計算時速 (Speed)
+
+如果你想把輪圈 RPM 換算成 **km/h**，可以在 Speed Gauge 前面加一個 `Function` 節點：
+
+```javascript
+// 假設輪胎周長為 2.1 公尺
+let wheel_rpm = msg.payload.value;
+let speed_kmh = (wheel_rpm * 2.1 * 60) / 1000;
+msg.payload = parseFloat(speed_kmh.toFixed(1));
+return msg;
+
+```
+
+### 3. 查看儀表板
+
+部署 (Deploy) 後，開啟瀏覽器前往：
+`http://你的Ubuntu_IP:1880/ui`
